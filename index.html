@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jexa Multiplayer</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background-color: #f4f4f9;
+    }
+
+    h1 {
+      margin-bottom: 10px;
+    }
+
+    .board {
+      display: grid;
+      grid-template-columns: repeat(6, 50px);
+      grid-gap: 5px;
+      margin-bottom: 20px;
+    }
+
+    .cell {
+      width: 50px;
+      height: 50px;
+      background-color: blue;
+      border: 1px solid #ccc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .cell.white {
+      background-color: white;
+    }
+
+    .info {
+      margin-bottom: 10px;
+    }
+
+    .btn {
+      padding: 10px 15px;
+      font-size: 16px;
+      cursor: pointer;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 5px;
+    }
+  </style>
+  
+</head>
+<body>
+  <h1>Jexa Multiplayer</h1>
+  <div class="info">You are Player <span id="player-role">?</span></div>
+  <div class="info">Player <span id="current-player">1</span>'s turn</div>
+  <div class="board" id="board"></div>
+  <button class="btn" id="restart-btn" disabled>Restart Game</button>
+<script>
+const boardElement = document.getElementById('board');
+const currentPlayerElement = document.getElementById('current-player');
+const playerRoleElement = document.getElementById('player-role');
+const restartButton = document.getElementById('restart-btn');
+
+const BOARD_SIZE = 6;
+let board = Array(BOARD_SIZE).fill().map(() => Array(BOARD_SIZE).fill(null)); // Initialize empty board
+let currentPlayer = 1;
+let playerRole = null;
+let isGameOver = false; // Flag to track game state
+
+const socket = new WebSocket('ws://localhost:8080');
+
+socket.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+
+  if (message.type === 'assignRole') {
+    playerRole = message.role;
+    playerRoleElement.textContent = playerRole;
+  }
+
+  if (message.type === 'init' || message.type === 'update') {
+    board = message.data.board;
+    currentPlayer = message.data.currentPlayer;
+    renderBoard();
+    updateCurrentPlayer();
+    restartButton.disabled = playerRole !== 1; // Only Player 1 can restart
+  }
+
+  if (message.type === 'error') {
+    alert(message.message);
+  }
+
+  if (message.type === 'gameOver') {
+    isGameOver = true;
+    alert(message.message); // Display win/loss message
+  }
+};
+
+function renderBoard() {
+  boardElement.innerHTML = '';
+  board.forEach((row, rowIndex) => {
+    row.forEach((cell, colIndex) => {
+      const cellElement = document.createElement('div');
+      cellElement.classList.add('cell');
+      if (cell === 'white') {
+        cellElement.classList.add('white');
+      }
+      cellElement.addEventListener('click', () => handleCellClick(rowIndex, colIndex));
+      boardElement.appendChild(cellElement);
+    });
+  });
+}
+
+function handleCellClick(row, col) {
+  if (isGameOver) {
+    alert("Game Over! Please restart to play again.");
+    return;
+  }
+
+  if (board[row][col] === 'white') {
+    alert("Invalid move: Tile already selected!");
+    return;
+  }
+
+  if (playerRole !== currentPlayer) {
+    alert("It's not your turn!");
+    return;
+  }
+
+  // Mark the tile as 'white' for the current player
+  board[row][col] = 'white';
+
+  // Send move to server
+  socket.send(JSON.stringify({ type: 'makeMove', data: { row, col, player: playerRole } }));
+
+  // Check win or loss conditions after the move
+  const winner = checkWinner(row, col);
+  if (winner === 'win') {
+    isGameOver = true;
+    alert('You win!');
+  } else if (checkLoss(row, col)) {
+    isGameOver = true;
+    alert('Game Over! You lose!');
+  } else {
+    currentPlayer = currentPlayer === 1 ? 2 : 1;
+    updateCurrentPlayer();
+  }
+}
+
+function updateCurrentPlayer() {
+  currentPlayerElement.textContent = currentPlayer;
+}
+
+restartButton.addEventListener('click', () => {
+  socket.send(JSON.stringify({ type: 'restart' }));
+  isGameOver = false;
+  board = Array(BOARD_SIZE).fill().map(() => Array(BOARD_SIZE).fill(null)); // Reset board
+  renderBoard();
+  updateCurrentPlayer();
+});
+
+function checkWinner(row, col) {
+  // Check for exactly 4 connected 'white' tiles in any direction
+  if (checkLine(row, col, 1, 0, 4) || checkLine(row, col, 0, 1, 4) || 
+      checkLine(row, col, 1, 1, 4) || checkLine(row, col, 1, -1, 4)) {
+    return 'win'; // Player wins with exactly 4 in a row
+  }
+
+  // No winner yet
+  return false;
+}
+
+function checkLoss(row, col) {
+  // Check for 5 or more connected 'white' tiles in any direction
+  if (
+    checkLine(row, col, 1, 0, 5) || // Check vertical
+    checkLine(row, col, 0, 1, 5) || // Check horizontal
+    checkLine(row, col, 1, 1, 5) || // Check diagonal (top-left to bottom-right)
+    checkLine(row, col, 1, -1, 5)   // Check diagonal (bottom-left to top-right)
+  ) {
+    return true; // Loss condition: 5+ connected 'white' tiles
+  }
+  return false;
+}
+
+function checkLine(row, col, rowDelta, colDelta, targetCount) {
+  let count = 1; // Start with the current tile
+
+  // Check in one direction
+  count += countTiles(row, col, rowDelta, colDelta);
+  // Check in the opposite direction
+  count += countTiles(row, col, -rowDelta, -colDelta);
+
+  if (count === targetCount) { // Exactly targetCount tiles (4 for win)
+    return true;
+  } else if (count > targetCount) { // 5 or more tiles (loss condition)
+    return false;
+  }
+
+  return false;
+}
+
+function countTiles(row, col, rowDelta, colDelta) {
+  let count = 0;
+  let r = row + rowDelta;
+  let c = col + colDelta;
+
+  while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board[r][c] === 'white') {
+    count++;
+    r += rowDelta;
+    c += colDelta;
+  }
+
+  return count;
+}
+
+</script>
+
+</body>
+</html>
