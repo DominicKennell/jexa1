@@ -77,7 +77,7 @@ let currentPlayer = 1;
 let playerRole = null;
 let isGameOver = false; // Flag to track game state
 
-const socket = new WebSocket('ws://localhost:8080');
+const socket = io('https://jexa1.onrender.com');
 
 socket.onmessage = (event) => {
   const message = JSON.parse(event.data);
